@@ -1,0 +1,390 @@
+##
+
+trigger:
+  branches:
+    include:
+    - 'main'
+    - 'release'
+    - 'development'
+  paths:
+    exclude:
+    - README.md
+    - .editorconfig
+    - .**/*.md
+    include:
+    - myapp/*
+
+pr:
+  branches:
+    include:
+      - '*' 
+pool: 'internal'
+
+parameters:
+  - name: kubectlVersion
+    type: string
+    default: '1.21.0'
+  - name: helmVersion
+    type: string
+    default: '3.6.3'
+  - name: k8sDevSvc
+    type: string
+    default: 'DEV - MY APP - EKS'
+  - name: k8sHmlSvc
+    type: string
+    default: 'HML - MY APP - EKS'
+  - name: k8sPrdSvc
+    type: string
+    default: 'PRD - MY APP - EKS'
+  - name: k8sNS
+    type: string
+    default: 'my-app-ns'
+  - name: myHelm
+    type: string
+    default: 'https://mycharts.myhome.com'
+  - name: releaseName
+    type: string
+    default: 'myschema'
+  - name: chartName
+    type: string
+    default: 'my-repo/myapp'
+
+
+stages:
+  - stage: DEV
+    displayName: DEV
+    condition: >
+      and(succeeded(),
+          ne(variables['Build.Reason'], 'PullRequest')
+        )
+    jobs:
+      - job: Preparing
+        displayName: 'Preparing DEV'
+        variables:
+          - group: 'K8S - MY APP - DEV'
+        steps:
+          - checkout: self
+
+          - task: replacetokens@3
+            displayName: Replace Tokens
+            inputs:
+              rootDirectory: myapp
+              targetFiles: '**/*.yaml'
+              encoding: 'utf-8'
+              writeBOM: false
+              verbosity: 'detailed'
+              actionOnMissing: 'fail'
+              keepToken: false
+              tokenPrefix: '{{#'
+              tokenSuffix: '#}}'
+            env:
+              QUEUE_PASSWORD: $(QUEUE_PASSWORD)
+              MY_APP_INGRESS_AUTH_PASSWORD: $(MY_APP_INGRESS_AUTH_PASSWORD)
+
+      - deployment: Deploy
+        displayName: Deploy DEV
+        environment: 'DEV - MY APP - EKS'
+        dependsOn: Preparing
+        variables:
+          - group: 'K8S - MY APP - DEV'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: Bash@3
+                  displayName: Install unzip
+                  inputs:
+                    targetType: 'inline'
+                    script: sudo apt-get install unzip
+
+                - task: KubectlInstaller@0
+                  displayName: Kubectl Install
+                  inputs:
+                    kubectlVersion: ${{ parameters.kubectlVersion }}
+
+                - task: HelmInstaller@1
+                  displayName: Helm Install
+                  inputs:
+                    helmVersionToInstall: ${{ parameters.helmVersion }}
+
+                - task: Bash@3
+                  displayName: Check file content
+                  enabled: false
+                  inputs:
+                    targetType: 'inline'
+                    script: find . && cat myapp/values.yaml
+
+                - task: HelmDeploy@0
+                  displayName: Add MY Charts repo
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sDevSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'add my-helm ${{ parameters.myHelm }}'
+
+                - task: HelmDeploy@0
+                  displayName: Helm list repos
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sDevSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'list'
+
+                - task: HelmDeploy@0
+                  displayName: Helm update repos cache
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sDevSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'update'
+
+                - task: HelmDeploy@0
+                  displayName: Install app
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sDevSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: "$(MY_APP_HELM_ACTION)"
+                    chartName: ${{ parameters.chartName }}
+                    releaseName: ${{ parameters.releaseName }}
+                    valueFile: myapp/values.yaml
+                    arguments: "--version=$(MY_APP_HELM_CHART_VERSION)"
+                    waitForExecution: true
+
+                - task: HelmDeploy@0
+                  displayName: Helm list
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sDevSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: ls
+                    arguments: --all
+
+  - stage: HML
+    displayName: HML
+    dependsOn: ''
+    condition: >
+      and(succeeded(),
+          ne(variables['Build.Reason'], 'PullRequest')
+        )
+    jobs:
+      - job: Preparing
+        displayName: 'Preparing HML'
+        variables:
+          - group: 'K8S - MY APP - HML'
+        steps:
+          - checkout: self
+
+          - task: replacetokens@3
+            displayName: Replace Tokens
+            inputs:
+              rootDirectory: myapp
+              targetFiles: '**/*.yaml'
+              encoding: 'utf-8'
+              writeBOM: false
+              verbosity: 'detailed'
+              actionOnMissing: 'fail'
+              keepToken: false
+              tokenPrefix: '{{#'
+              tokenSuffix: '#}}'
+            env:
+              QUEUE_PASSWORD: $(QUEUE_PASSWORD)
+              MY_APP_INGRESS_AUTH_PASSWORD: $(MY_APP_INGRESS_AUTH_PASSWORD)
+
+      - deployment: Deploy
+        displayName: Deploy HML
+        environment: 'HML - MY APP - EKS'
+        dependsOn: Preparing
+        variables:
+          - group: 'K8S - MY APP - HML'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: Bash@3
+                  displayName: Install unzip
+                  inputs:
+                    targetType: 'inline'
+                    script: sudo apt-get install unzip
+
+                - task: KubectlInstaller@0
+                  displayName: Kubectl Install
+                  inputs:
+                    kubectlVersion: ${{ parameters.kubectlVersion }}
+
+                - task: HelmInstaller@1
+                  displayName: Helm Install
+                  inputs:
+                    helmVersionToInstall: ${{ parameters.helmVersion }}
+
+                - task: Bash@3
+                  displayName: Check file content
+                  enabled: false
+                  inputs:
+                    targetType: 'inline'
+                    script: find . && cat myapp/values.yaml
+
+                - task: HelmDeploy@0
+                  displayName: Add MY Charts repo
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sHmlSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'add my-helm ${{ parameters.myHelm }}'
+
+                - task: HelmDeploy@0
+                  displayName: Helm list repos
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sHmlSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'list'
+
+                - task: HelmDeploy@0
+                  displayName: Helm update repos cache
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sHmlSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'update'
+
+                - task: HelmDeploy@0
+                  displayName: Install app
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sHmlSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: "$(MY_APP_HELM_ACTION)"
+                    chartName: ${{ parameters.chartName }}
+                    releaseName: ${{ parameters.releaseName }}
+                    valueFile: myapp/values.yaml
+                    arguments: "--version=$(MY_APP_HELM_CHART_VERSION)"
+                    waitForExecution: true
+
+                - task: HelmDeploy@0
+                  displayName: Helm list
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sHmlSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: ls
+                    arguments: --all
+
+  - stage: PRD
+    displayName: PRD
+    dependsOn: ''
+    condition: >
+      and(succeeded(),
+          ne(variables['Build.Reason'], 'PullRequest')
+        )
+    jobs:
+      - job: Preparing
+        displayName: 'Preparing PRD'
+        variables:
+          - group: 'K8S - MY APP - PRD'
+        steps:
+          - checkout: self
+
+          - task: replacetokens@3
+            displayName: Replace Tokens
+            inputs:
+              rootDirectory: myapp
+              targetFiles: '**/*.yaml'
+              encoding: 'utf-8'
+              writeBOM: false
+              verbosity: 'detailed'
+              actionOnMissing: 'fail'
+              keepToken: false
+              tokenPrefix: '{{#'
+              tokenSuffix: '#}}'
+            env:
+              QUEUE_PASSWORD: $(QUEUE_PASSWORD)
+              MY_APP_INGRESS_AUTH_PASSWORD: $(MY_APP_INGRESS_AUTH_PASSWORD)
+
+      - deployment: Deploy
+        displayName: Deploy PRD
+        environment: 'PRD - MY APP - EKS'
+        dependsOn: Preparing
+        variables:
+          - group: 'K8S - MY APP - PRD'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: Bash@3
+                  displayName: Install unzip
+                  inputs:
+                    targetType: 'inline'
+                    script: sudo apt-get install unzip
+
+                - task: KubectlInstaller@0
+                  displayName: Kubectl Install
+                  inputs:
+                    kubectlVersion: ${{ parameters.kubectlVersion }}
+
+                - task: HelmInstaller@1
+                  displayName: Helm Install
+                  inputs:
+                    helmVersionToInstall: ${{ parameters.helmVersion }}
+
+                - task: Bash@3
+                  displayName: Check file content
+                  enabled: false
+                  inputs:
+                    targetType: 'inline'
+                    script: find . && cat myapp/values.yaml
+
+                - task: HelmDeploy@0
+                  displayName: Add MY Charts repo
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sPrdSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'add my-helm ${{ parameters.myHelm }}'
+
+                - task: HelmDeploy@0
+                  displayName: Helm list repos
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sPrdSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'list'
+
+                - task: HelmDeploy@0
+                  displayName: Helm update repos cache
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sPrdSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: 'repo'
+                    arguments: 'update'
+
+                - task: HelmDeploy@0
+                  displayName: Install app
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sPrdSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: "$(MY_APP_HELM_ACTION)"
+                    chartName: ${{ parameters.chartName }}
+                    releaseName: ${{ parameters.releaseName }}
+                    valueFile: myapp/values.yaml
+                    arguments: "--version=$(MY_APP_HELM_CHART_VERSION)"
+                    waitForExecution: true
+
+                - task: HelmDeploy@0
+                  displayName: Helm list
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: ${{ parameters.k8sPrdSvc }}
+                    namespace: ${{ parameters.k8sNS }}
+                    command: ls
+                    arguments: --all
